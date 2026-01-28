@@ -1,6 +1,10 @@
-# Nonprofit Vetting MCP Server
+# Grassroot Vetting MCP Server
 
-An MCP (Model Context Protocol) server for automated nonprofit vetting using the ProPublica Nonprofit Explorer API. Implements Tier 1 automated checks from a nonprofit vetting framework.
+An MCP (Model Context Protocol) server for automated **grassroots nonprofit vetting** using the ProPublica Nonprofit Explorer API. Implements Tier 1 automated checks from a VC-style nonprofit vetting framework.
+
+## Grassroots Focus
+
+This tool targets **grassroots and community-based nonprofits** ($100K-$10M revenue), not large national charities. The sweet spot: local organizations with real programs, staff, and community impact—but limited fundraising reach.
 
 ## Features
 
@@ -49,8 +53,8 @@ The `check_tier1` tool evaluates nonprofits on five criteria:
 
 ```bash
 # Clone the repository
-git clone https://github.com/kofort9/nonprofit-vetting-mcp.git
-cd nonprofit-vetting-mcp
+git clone https://github.com/kofort9/grassroot-vetting-mcp.git
+cd grassroot-vetting-mcp
 
 # Install dependencies
 npm install
@@ -66,9 +70,9 @@ Add to your `.mcp.json` configuration:
 ```json
 {
   "mcpServers": {
-    "nonprofit-vetting": {
+    "grassroot-vetting": {
       "command": "node",
-      "args": ["/path/to/nonprofit-vetting-mcp/dist/index.js"]
+      "args": ["/path/to/grassroot-vetting-mcp/dist/index.js"]
     }
   }
 }

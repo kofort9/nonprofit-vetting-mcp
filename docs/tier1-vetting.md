@@ -1,6 +1,6 @@
 # Tier 1 Nonprofit Vetting
 
-This document explains how the nonprofit-vetting-mcp implements Tier 1 automated screening as part of Bonsaei's VC-style NGO vetting framework.
+This document explains how the grassroot-vetting-mcp implements Tier 1 automated screening as part of Bonsaei's VC-style NGO vetting framework.
 
 ## Overview
 

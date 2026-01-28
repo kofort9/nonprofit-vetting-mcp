@@ -1,17 +1,17 @@
 {
-  "name": "nonprofit-vetting-mcp",
+  "name": "grassroot-vetting-mcp",
   "version": "1.0.0",
-  "description": "MCP server for automated nonprofit vetting using ProPublica Nonprofit Explorer API",
+  "description": "MCP server for automated grassroots nonprofit vetting using ProPublica Nonprofit Explorer API",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "repository": {
     "type": "git",
-    "url": "https://github.com/kofort9/nonprofit-vetting-mcp.git"
+    "url": "https://github.com/kofort9/grassroot-vetting-mcp.git"
   },
-  "homepage": "https://github.com/kofort9/nonprofit-vetting-mcp#readme",
+  "homepage": "https://github.com/kofort9/grassroot-vetting-mcp#readme",
   "bugs": {
-    "url": "https://github.com/kofort9/nonprofit-vetting-mcp/issues"
+    "url": "https://github.com/kofort9/grassroot-vetting-mcp/issues"
   },
   "scripts": {
     "build": "tsc",
@@ -26,10 +26,12 @@
   "keywords": [
     "mcp",
     "nonprofit",
+    "grassroot",
     "vetting",
     "propublica",
     "501c3",
-    "due-diligence"
+    "due-diligence",
+    "bonsaei"
   ],
   "author": "",
   "license": "MIT",
