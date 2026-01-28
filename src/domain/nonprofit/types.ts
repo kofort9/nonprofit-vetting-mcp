@@ -109,11 +109,19 @@ export interface Tier1Check {
   weight: number;
 }
 
+export interface Tier1Summary {
+  headline: string;
+  justification: string;
+  key_factors: string[]; // Prefixed: "+" positive, "-" negative, "~" neutral/warning
+  next_steps: string[];
+}
+
 export interface Tier1Result {
   ein: string;
   name: string;
   passed: boolean;
   score: number;
+  summary: Tier1Summary;
   checks: Tier1Check[];
   recommendation: 'PASS' | 'REVIEW' | 'REJECT';
   red_flags: RedFlag[];

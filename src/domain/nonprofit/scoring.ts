@@ -10,6 +10,7 @@ import {
   ProPublica990Filing,
 } from './types.js';
 import { ProPublicaClient } from './propublica-client.js';
+import { generateSummary } from './messages.js';
 
 // ============================================================================
 // Weight Configuration for Tier 1 Checks
@@ -415,11 +416,22 @@ export function runTier1Checks(
   // Overall passed = recommendation is PASS
   const passed = recommendation === 'PASS';
 
+  // Generate standardized summary
+  const summary = generateSummary(
+    profile.name,
+    score,
+    recommendation,
+    checks,
+    redFlags,
+    profile.years_operating
+  );
+
   return {
     ein: profile.ein,
     name: profile.name,
     passed,
     score,
+    summary,
     checks,
     recommendation,
     red_flags: redFlags,
