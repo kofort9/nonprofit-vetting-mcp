@@ -13,6 +13,11 @@ import { logDebug, logError } from '../../core/logging.js';
 
 const ATTRIBUTION = 'Data provided by ProPublica Nonprofit Explorer (https://projects.propublica.org/nonprofits/)';
 
+// Security: Input length limits to prevent DoS
+const MAX_QUERY_LENGTH = 500;
+const MAX_STATE_LENGTH = 2;
+const MAX_CITY_LENGTH = 100;
+
 // ============================================================================
 // Tool Input Types
 // ============================================================================
@@ -51,6 +56,29 @@ export async function searchNonprofit(
       return {
         success: false,
         error: 'Query parameter is required',
+        attribution: ATTRIBUTION,
+      };
+    }
+
+    // Security: Validate input lengths to prevent DoS
+    if (input.query.length > MAX_QUERY_LENGTH) {
+      return {
+        success: false,
+        error: `Query too long (max ${MAX_QUERY_LENGTH} characters)`,
+        attribution: ATTRIBUTION,
+      };
+    }
+    if (input.state && input.state.length > MAX_STATE_LENGTH) {
+      return {
+        success: false,
+        error: `State must be 2-letter code`,
+        attribution: ATTRIBUTION,
+      };
+    }
+    if (input.city && input.city.length > MAX_CITY_LENGTH) {
+      return {
+        success: false,
+        error: `City too long (max ${MAX_CITY_LENGTH} characters)`,
         attribution: ATTRIBUTION,
       };
     }
@@ -131,7 +159,7 @@ export async function getNonprofitProfile(
         total_expenses: latestFiling.totfuncexpns,
         total_assets: latestFiling.totassetsend,
         total_liabilities: latestFiling.totliabend,
-        overhead_ratio: overheadRatio ?? 0,
+        overhead_ratio: overheadRatio, // Keep null if calculation not possible
         program_revenue: latestFiling.totprgmrevnue,
         contributions: latestFiling.totcntrbgfts,
       };
@@ -151,7 +179,7 @@ export async function getNonprofitProfile(
         state: org.state || '',
       },
       ruling_date: org.ruling_date || '',
-      years_operating: yearsOperating ?? 0,
+      years_operating: yearsOperating, // Keep null if ruling date unavailable
       subsection: subsection,
       is_501c3: subsection === '03',
       ntee_code: org.ntee_code || '',
@@ -220,7 +248,7 @@ export async function checkTier1(
         total_expenses: latestFiling.totfuncexpns,
         total_assets: latestFiling.totassetsend,
         total_liabilities: latestFiling.totliabend,
-        overhead_ratio: overheadRatio ?? 0,
+        overhead_ratio: overheadRatio, // Keep null if calculation not possible
         program_revenue: latestFiling.totprgmrevnue,
         contributions: latestFiling.totcntrbgfts,
       };
@@ -239,7 +267,7 @@ export async function checkTier1(
         state: org.state || '',
       },
       ruling_date: org.ruling_date || '',
-      years_operating: yearsOperating ?? 0,
+      years_operating: yearsOperating, // Keep null if ruling date unavailable
       subsection: subsection,
       is_501c3: subsection === '03',
       ntee_code: org.ntee_code || '',
@@ -311,7 +339,7 @@ export async function getRedFlags(
         total_expenses: latestFiling.totfuncexpns,
         total_assets: latestFiling.totassetsend,
         total_liabilities: latestFiling.totliabend,
-        overhead_ratio: overheadRatio ?? 0,
+        overhead_ratio: overheadRatio, // Keep null if calculation not possible
         program_revenue: latestFiling.totprgmrevnue,
         contributions: latestFiling.totcntrbgfts,
       };
@@ -330,7 +358,7 @@ export async function getRedFlags(
         state: org.state || '',
       },
       ruling_date: org.ruling_date || '',
-      years_operating: yearsOperating ?? 0,
+      years_operating: yearsOperating, // Keep null if ruling date unavailable
       subsection: subsection,
       is_501c3: subsection === '03',
       ntee_code: org.ntee_code || '',

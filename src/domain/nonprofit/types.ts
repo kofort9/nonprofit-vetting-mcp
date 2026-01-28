@@ -77,7 +77,7 @@ export interface Latest990Summary {
   total_expenses: number;
   total_assets: number;
   total_liabilities: number;
-  overhead_ratio: number;
+  overhead_ratio: number | null; // null when calculation not possible
   program_revenue?: number;
   contributions?: number;
 }
@@ -87,7 +87,7 @@ export interface NonprofitProfile {
   name: string;
   address: NonprofitAddress;
   ruling_date: string;
-  years_operating: number;
+  years_operating: number | null; // null when ruling date unavailable
   subsection: string;
   is_501c3: boolean;
   ntee_code: string;

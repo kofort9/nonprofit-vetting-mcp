@@ -9,7 +9,8 @@ import {
 } from './types.js';
 
 /**
- * Simple rate limiter that enforces delay between requests
+ * Simple rate limiter that enforces delay between requests.
+ * Uses optimistic locking to handle concurrent requests.
  */
 class RateLimiter {
   private lastRequestTime = 0;
@@ -25,11 +26,13 @@ class RateLimiter {
 
     if (elapsed < this.delayMs) {
       const waitTime = this.delayMs - elapsed;
+      // Update timestamp BEFORE waiting to prevent concurrent bypass
+      this.lastRequestTime = now + waitTime;
       logDebug(`Rate limiting: waiting ${waitTime}ms`);
       await new Promise((resolve) => setTimeout(resolve, waitTime));
+    } else {
+      this.lastRequestTime = now;
     }
-
-    this.lastRequestTime = Date.now();
   }
 }
 
@@ -141,12 +144,18 @@ export class ProPublicaClient {
    *
    * @param ein - Employer Identification Number (with or without dash)
    * @returns Organization details with filings
+   * @throws Error if EIN format is invalid
    */
   async getOrganization(ein: string): Promise<ProPublicaOrgDetailResponse | null> {
     await this.rateLimiter.waitIfNeeded();
 
     // Normalize EIN - remove dashes and whitespace
     const normalizedEin = ein.replace(/[-\s]/g, '');
+
+    // Validate EIN is exactly 9 digits (security: prevent path injection)
+    if (!/^\d{9}$/.test(normalizedEin)) {
+      throw new Error(`Invalid EIN format: expected 9 digits, got "${ein}"`);
+    }
 
     try {
       const response = await this.client.get<ProPublicaOrgDetailResponse>(
@@ -196,10 +205,20 @@ export class ProPublicaClient {
    * Returns null if calculation not possible
    */
   static calculateOverheadRatio(filing: ProPublica990Filing): number | null {
-    if (!filing.totrevenue || filing.totrevenue === 0) return null;
-    if (filing.totfuncexpns === undefined) return null;
+    const revenue = filing.totrevenue;
+    const expenses = filing.totfuncexpns;
 
-    return filing.totfuncexpns / filing.totrevenue;
+    // Guard against missing, zero, or negative revenue
+    if (typeof revenue !== 'number' || !Number.isFinite(revenue) || revenue <= 0) {
+      return null;
+    }
+    // Guard against missing or non-finite expenses
+    if (typeof expenses !== 'number' || !Number.isFinite(expenses)) {
+      return null;
+    }
+
+    const ratio = expenses / revenue;
+    return Number.isFinite(ratio) ? ratio : null;
   }
 
   /**
@@ -249,11 +268,11 @@ export class ProPublicaClient {
    */
   static calculateYearsOperating(rulingDate: string): number | null {
     const date = this.parseRulingDate(rulingDate);
-    if (!date) return null;
+    if (!date || isNaN(date.getTime())) return null;
 
     const now = new Date();
     const years = (now.getTime() - date.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
-    return Math.floor(years);
+    return Number.isFinite(years) ? Math.floor(years) : null;
   }
 
   /**
@@ -268,19 +287,12 @@ export class ProPublicaClient {
 
   /**
    * Get form type name from formtype number
+   * ProPublica uses: 0/1 = 990, 2 = 990EZ, 3 = 990PF
    */
   static getFormTypeName(formtype: number): string {
-    switch (formtype) {
-      case 990:
-        return '990';
-      case 990:
-        return '990';
-      default:
-        // ProPublica uses various codes
-        if (formtype === 0 || formtype === 1) return '990';
-        if (formtype === 2) return '990EZ';
-        if (formtype === 3) return '990PF';
-        return `Form ${formtype}`;
-    }
+    if (formtype === 0 || formtype === 1 || formtype === 990) return '990';
+    if (formtype === 2) return '990EZ';
+    if (formtype === 3) return '990PF';
+    return `Form ${formtype}`;
   }
 }

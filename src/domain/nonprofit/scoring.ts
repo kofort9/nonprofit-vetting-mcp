@@ -93,9 +93,15 @@ export function checkRevenueRange(profile: NonprofitProfile): Tier1Check {
   let result: CheckResult;
   let detail: string;
 
-  if (!revenue || revenue === 0) {
+  if (revenue === undefined || revenue === null) {
     result = 'FAIL';
     detail = 'No revenue data available';
+  } else if (revenue < 0) {
+    result = 'FAIL';
+    detail = `Negative revenue ($${formatNumber(revenue)}) - data anomaly requires investigation`;
+  } else if (revenue === 0) {
+    result = 'FAIL';
+    detail = 'Zero revenue reported';
   } else if (revenue < 50000) {
     result = 'FAIL';
     detail = `$${formatNumber(revenue)} revenue - too small to assess reliably`;
@@ -325,7 +331,7 @@ export function detectRedFlags(
 
     // Expense efficiency flags (NOTE: this is expense/revenue, NOT true overhead)
     const ratio = profile.latest_990.overhead_ratio;
-    if (ratio !== undefined) {
+    if (ratio !== undefined && ratio !== null) {
       // Very high burn rate (spending significantly more than revenue)
       if (ratio > 1.2) {
         flags.push({
