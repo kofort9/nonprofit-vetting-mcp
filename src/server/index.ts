@@ -15,7 +15,8 @@ const SERVER_VERSION = '1.0.0';
 
 // Load configuration and initialize client
 const config = loadConfig();
-const propublicaClient = new ProPublicaClient(config);
+const propublicaClient = new ProPublicaClient(config.propublica);
+const { thresholds } = config;
 
 // Create MCP server instance
 const server = new Server(
@@ -109,87 +110,61 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   };
 });
 
+// Format any ToolResponse into an MCP content response
+function formatToolResponse(result: { success: boolean }) {
+  return {
+    content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+    isError: !result.success,
+  };
+}
+
+
+function argString(args: Record<string, unknown> | undefined, key: string): string {
+  const val = args?.[key];
+  return typeof val === 'string' ? val : '';
+}
+
+function argStringOpt(args: Record<string, unknown> | undefined, key: string): string | undefined {
+  const val = args?.[key];
+  return typeof val === 'string' ? val : undefined;
+}
+
 // Handle call_tool request
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   try {
     if (name === 'search_nonprofit') {
-      const result = await tools.searchNonprofit(propublicaClient, {
-        query: args?.query as string,
-        state: args?.state as string | undefined,
-        city: args?.city as string | undefined,
-      });
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-        isError: !result.success,
-      };
+      return formatToolResponse(await tools.searchNonprofit(propublicaClient, {
+        query: argString(args, 'query'),
+        state: argStringOpt(args, 'state'),
+        city: argStringOpt(args, 'city'),
+      }));
     }
 
     if (name === 'get_nonprofit_profile') {
-      const result = await tools.getNonprofitProfile(propublicaClient, {
-        ein: args?.ein as string,
-      });
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-        isError: !result.success,
-      };
+      return formatToolResponse(await tools.getNonprofitProfile(propublicaClient, {
+        ein: argString(args, 'ein'),
+      }));
     }
 
     if (name === 'check_tier1') {
-      const result = await tools.checkTier1(propublicaClient, {
-        ein: args?.ein as string,
-      });
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-        isError: !result.success,
-      };
+      return formatToolResponse(await tools.checkTier1(propublicaClient, {
+        ein: argString(args, 'ein'),
+      }, thresholds));
     }
 
     if (name === 'get_red_flags') {
-      const result = await tools.getRedFlags(propublicaClient, {
-        ein: args?.ein as string,
-      });
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-        isError: !result.success,
-      };
+      return formatToolResponse(await tools.getRedFlags(propublicaClient, {
+        ein: argString(args, 'ein'),
+      }, thresholds));
     }
 
     throw new Error(`Unknown tool: ${name}`);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     return {
-      content: [
-        {
-          type: 'text',
-          text: `Error: ${errorMessage}`,
-        },
-      ],
+      content: [{ type: 'text' as const, text: `Error: ${errorMessage}` }],
       isError: true,
     };
   }

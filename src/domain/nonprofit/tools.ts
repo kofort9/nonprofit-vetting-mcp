@@ -7,6 +7,9 @@ import {
   Tier1Result,
   RedFlagResult,
   Latest990Summary,
+  VettingThresholds,
+  ProPublicaOrgDetailResponse,
+  ProPublica990Filing,
 } from './types.js';
 import { runTier1Checks, runRedFlagCheck } from './scoring.js';
 import { logDebug, logError } from '../../core/logging.js';
@@ -38,6 +41,93 @@ export interface CheckTier1Input {
 
 export interface GetRedFlagsInput {
   ein: string;
+}
+
+// ============================================================================
+// Shared Helper
+// ============================================================================
+
+function buildProfile(response: ProPublicaOrgDetailResponse): {
+  profile: NonprofitProfile;
+  filings: ProPublica990Filing[];
+} {
+  const org = response.organization;
+  const filings = response.filings_with_data ?? [];
+  const latestFiling = ProPublicaClient.getMostRecentFiling(filings);
+
+  let latest990: Latest990Summary | null = null;
+  if (latestFiling) {
+    const overheadRatio = ProPublicaClient.calculateOverheadRatio(latestFiling);
+    latest990 = {
+      tax_period: ProPublicaClient.formatTaxPeriod(latestFiling.tax_prd),
+      tax_year: latestFiling.tax_prd_yr,
+      form_type: ProPublicaClient.getFormTypeName(latestFiling.formtype),
+      total_revenue: latestFiling.totrevenue,
+      total_expenses: latestFiling.totfuncexpns,
+      total_assets: latestFiling.totassetsend,
+      total_liabilities: latestFiling.totliabend,
+      overhead_ratio: overheadRatio,
+      program_revenue: latestFiling.totprgmrevnue,
+      contributions: latestFiling.totcntrbgfts,
+    };
+  }
+
+  const yearsOperating = org.ruling_date
+    ? ProPublicaClient.calculateYearsOperating(org.ruling_date)
+    : null;
+
+  const subsection = ProPublicaClient.getSubsection(org);
+  const profile: NonprofitProfile = {
+    ein: ProPublicaClient.formatEin(org.ein),
+    name: org.name,
+    address: {
+      city: org.city || '',
+      state: org.state || '',
+    },
+    ruling_date: org.ruling_date || '',
+    years_operating: yearsOperating,
+    subsection: subsection,
+    ntee_code: org.ntee_code || '',
+    latest_990: latest990,
+    filing_count: filings.length,
+  };
+
+  return { profile, filings };
+}
+
+// ============================================================================
+// Shared EIN Lookup Wrapper
+// ============================================================================
+
+/**
+ * Wraps the common pattern: validate EIN → fetch org → build profile → run logic.
+ * Handles try/catch, logging, attribution, and error responses uniformly.
+ */
+async function withEinLookup<T>(
+  client: ProPublicaClient,
+  ein: string,
+  toolName: string,
+  fn: (profile: NonprofitProfile, filings: ProPublica990Filing[]) => T
+): Promise<ToolResponse<T>> {
+  try {
+    if (!ein) {
+      return { success: false, error: 'EIN parameter is required', attribution: ATTRIBUTION };
+    }
+
+    logDebug(`${toolName} for EIN: ${ein}`);
+    const response = await client.getOrganization(ein);
+
+    if (!response) {
+      return { success: false, error: `Organization not found with EIN: ${ein}`, attribution: ATTRIBUTION };
+    }
+
+    const { profile, filings } = buildProfile(response);
+    return { success: true, data: fn(profile, filings), attribution: ATTRIBUTION };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logError(`${toolName} failed:`, message);
+    return { success: false, error: `${toolName} failed: ${message}`, attribution: ATTRIBUTION };
+  }
 }
 
 // ============================================================================
@@ -122,85 +212,7 @@ export async function getNonprofitProfile(
   client: ProPublicaClient,
   input: GetNonprofitProfileInput
 ): Promise<ToolResponse<NonprofitProfile>> {
-  try {
-    if (!input.ein) {
-      return {
-        success: false,
-        error: 'EIN parameter is required',
-        attribution: ATTRIBUTION,
-      };
-    }
-
-    logDebug(`Getting profile for EIN: ${input.ein}`);
-
-    const response = await client.getOrganization(input.ein);
-
-    if (!response) {
-      return {
-        success: false,
-        error: `Organization not found with EIN: ${input.ein}`,
-        attribution: ATTRIBUTION,
-      };
-    }
-
-    const org = response.organization;
-    const filings = response.filings_with_data || [];
-    const latestFiling = ProPublicaClient.getMostRecentFiling(filings);
-
-    // Build latest 990 summary
-    let latest990: Latest990Summary | null = null;
-    if (latestFiling) {
-      const overheadRatio = ProPublicaClient.calculateOverheadRatio(latestFiling);
-      latest990 = {
-        tax_period: ProPublicaClient.formatTaxPeriod(latestFiling.tax_prd),
-        tax_year: latestFiling.tax_prd_yr,
-        form_type: ProPublicaClient.getFormTypeName(latestFiling.formtype),
-        total_revenue: latestFiling.totrevenue,
-        total_expenses: latestFiling.totfuncexpns,
-        total_assets: latestFiling.totassetsend,
-        total_liabilities: latestFiling.totliabend,
-        overhead_ratio: overheadRatio, // Keep null if calculation not possible
-        program_revenue: latestFiling.totprgmrevnue,
-        contributions: latestFiling.totcntrbgfts,
-      };
-    }
-
-    // Calculate years operating
-    const yearsOperating = org.ruling_date
-      ? ProPublicaClient.calculateYearsOperating(org.ruling_date)
-      : null;
-
-    const subsection = ProPublicaClient.getSubsection(org);
-    const profile: NonprofitProfile = {
-      ein: ProPublicaClient.formatEin(org.ein),
-      name: org.name,
-      address: {
-        city: org.city || '',
-        state: org.state || '',
-      },
-      ruling_date: org.ruling_date || '',
-      years_operating: yearsOperating, // Keep null if ruling date unavailable
-      subsection: subsection,
-      is_501c3: subsection === '03',
-      ntee_code: org.ntee_code || '',
-      latest_990: latest990,
-      filing_count: filings.length,
-    };
-
-    return {
-      success: true,
-      data: profile,
-      attribution: ATTRIBUTION,
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logError('getNonprofitProfile failed:', message);
-    return {
-      success: false,
-      error: `Failed to get profile: ${message}`,
-      attribution: ATTRIBUTION,
-    };
-  }
+  return withEinLookup(client, input.ein, 'getNonprofitProfile', (profile) => profile);
 }
 
 /**
@@ -208,90 +220,12 @@ export async function getNonprofitProfile(
  */
 export async function checkTier1(
   client: ProPublicaClient,
-  input: CheckTier1Input
+  input: CheckTier1Input,
+  thresholds: VettingThresholds
 ): Promise<ToolResponse<Tier1Result>> {
-  try {
-    if (!input.ein) {
-      return {
-        success: false,
-        error: 'EIN parameter is required',
-        attribution: ATTRIBUTION,
-      };
-    }
-
-    logDebug(`Running Tier 1 checks for EIN: ${input.ein}`);
-
-    // Get organization data
-    const response = await client.getOrganization(input.ein);
-
-    if (!response) {
-      return {
-        success: false,
-        error: `Organization not found with EIN: ${input.ein}`,
-        attribution: ATTRIBUTION,
-      };
-    }
-
-    const org = response.organization;
-    const filings = response.filings_with_data || [];
-    const latestFiling = ProPublicaClient.getMostRecentFiling(filings);
-
-    // Build profile for scoring
-    let latest990: Latest990Summary | null = null;
-    if (latestFiling) {
-      const overheadRatio = ProPublicaClient.calculateOverheadRatio(latestFiling);
-      latest990 = {
-        tax_period: ProPublicaClient.formatTaxPeriod(latestFiling.tax_prd),
-        tax_year: latestFiling.tax_prd_yr,
-        form_type: ProPublicaClient.getFormTypeName(latestFiling.formtype),
-        total_revenue: latestFiling.totrevenue,
-        total_expenses: latestFiling.totfuncexpns,
-        total_assets: latestFiling.totassetsend,
-        total_liabilities: latestFiling.totliabend,
-        overhead_ratio: overheadRatio, // Keep null if calculation not possible
-        program_revenue: latestFiling.totprgmrevnue,
-        contributions: latestFiling.totcntrbgfts,
-      };
-    }
-
-    const yearsOperating = org.ruling_date
-      ? ProPublicaClient.calculateYearsOperating(org.ruling_date)
-      : null;
-
-    const subsection = ProPublicaClient.getSubsection(org);
-    const profile: NonprofitProfile = {
-      ein: ProPublicaClient.formatEin(org.ein),
-      name: org.name,
-      address: {
-        city: org.city || '',
-        state: org.state || '',
-      },
-      ruling_date: org.ruling_date || '',
-      years_operating: yearsOperating, // Keep null if ruling date unavailable
-      subsection: subsection,
-      is_501c3: subsection === '03',
-      ntee_code: org.ntee_code || '',
-      latest_990: latest990,
-      filing_count: filings.length,
-    };
-
-    // Run Tier 1 checks
-    const result = runTier1Checks(profile, filings);
-
-    return {
-      success: true,
-      data: result,
-      attribution: ATTRIBUTION,
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logError('checkTier1 failed:', message);
-    return {
-      success: false,
-      error: `Tier 1 check failed: ${message}`,
-      attribution: ATTRIBUTION,
-    };
-  }
+  return withEinLookup(client, input.ein, 'checkTier1', (profile, filings) =>
+    runTier1Checks(profile, filings, thresholds)
+  );
 }
 
 /**
@@ -299,88 +233,10 @@ export async function checkTier1(
  */
 export async function getRedFlags(
   client: ProPublicaClient,
-  input: GetRedFlagsInput
+  input: GetRedFlagsInput,
+  thresholds: VettingThresholds
 ): Promise<ToolResponse<RedFlagResult>> {
-  try {
-    if (!input.ein) {
-      return {
-        success: false,
-        error: 'EIN parameter is required',
-        attribution: ATTRIBUTION,
-      };
-    }
-
-    logDebug(`Getting red flags for EIN: ${input.ein}`);
-
-    // Get organization data
-    const response = await client.getOrganization(input.ein);
-
-    if (!response) {
-      return {
-        success: false,
-        error: `Organization not found with EIN: ${input.ein}`,
-        attribution: ATTRIBUTION,
-      };
-    }
-
-    const org = response.organization;
-    const filings = response.filings_with_data || [];
-    const latestFiling = ProPublicaClient.getMostRecentFiling(filings);
-
-    // Build profile for red flag detection
-    let latest990: Latest990Summary | null = null;
-    if (latestFiling) {
-      const overheadRatio = ProPublicaClient.calculateOverheadRatio(latestFiling);
-      latest990 = {
-        tax_period: ProPublicaClient.formatTaxPeriod(latestFiling.tax_prd),
-        tax_year: latestFiling.tax_prd_yr,
-        form_type: ProPublicaClient.getFormTypeName(latestFiling.formtype),
-        total_revenue: latestFiling.totrevenue,
-        total_expenses: latestFiling.totfuncexpns,
-        total_assets: latestFiling.totassetsend,
-        total_liabilities: latestFiling.totliabend,
-        overhead_ratio: overheadRatio, // Keep null if calculation not possible
-        program_revenue: latestFiling.totprgmrevnue,
-        contributions: latestFiling.totcntrbgfts,
-      };
-    }
-
-    const yearsOperating = org.ruling_date
-      ? ProPublicaClient.calculateYearsOperating(org.ruling_date)
-      : null;
-
-    const subsection = ProPublicaClient.getSubsection(org);
-    const profile: NonprofitProfile = {
-      ein: ProPublicaClient.formatEin(org.ein),
-      name: org.name,
-      address: {
-        city: org.city || '',
-        state: org.state || '',
-      },
-      ruling_date: org.ruling_date || '',
-      years_operating: yearsOperating, // Keep null if ruling date unavailable
-      subsection: subsection,
-      is_501c3: subsection === '03',
-      ntee_code: org.ntee_code || '',
-      latest_990: latest990,
-      filing_count: filings.length,
-    };
-
-    // Run red flag detection
-    const result = runRedFlagCheck(profile, filings);
-
-    return {
-      success: true,
-      data: result,
-      attribution: ATTRIBUTION,
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logError('getRedFlags failed:', message);
-    return {
-      success: false,
-      error: `Red flag check failed: ${message}`,
-      attribution: ATTRIBUTION,
-    };
-  }
+  return withEinLookup(client, input.ein, 'getRedFlags', (profile, filings) =>
+    runRedFlagCheck(profile, filings, thresholds)
+  );
 }

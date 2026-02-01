@@ -9,30 +9,31 @@ import {
 } from './types.js';
 
 /**
- * Simple rate limiter that enforces delay between requests.
- * Uses optimistic locking to handle concurrent requests.
+ * Rate limiter that serializes requests via a promise chain.
+ * Each call appends to the chain, ensuring only one request
+ * executes at a time with the configured delay between them.
  */
 class RateLimiter {
-  private lastRequestTime = 0;
+  private chain: Promise<void> = Promise.resolve();
+  private lastTime = 0;
   private readonly delayMs: number;
 
   constructor(delayMs: number) {
     this.delayMs = delayMs;
   }
 
-  async waitIfNeeded(): Promise<void> {
-    const now = Date.now();
-    const elapsed = now - this.lastRequestTime;
-
-    if (elapsed < this.delayMs) {
-      const waitTime = this.delayMs - elapsed;
-      // Update timestamp BEFORE waiting to prevent concurrent bypass
-      this.lastRequestTime = now + waitTime;
-      logDebug(`Rate limiting: waiting ${waitTime}ms`);
-      await new Promise((resolve) => setTimeout(resolve, waitTime));
-    } else {
-      this.lastRequestTime = now;
-    }
+  waitIfNeeded(): Promise<void> {
+    this.chain = this.chain.then(async () => {
+      const now = Date.now();
+      const elapsed = now - this.lastTime;
+      if (elapsed < this.delayMs) {
+        const waitTime = this.delayMs - elapsed;
+        logDebug(`Rate limiting: waiting ${waitTime}ms`);
+        await new Promise<void>((r) => setTimeout(r, waitTime));
+      }
+      this.lastTime = Date.now();
+    });
+    return this.chain;
   }
 }
 
@@ -154,7 +155,7 @@ export class ProPublicaClient {
 
     // Validate EIN is exactly 9 digits (security: prevent path injection)
     if (!/^\d{9}$/.test(normalizedEin)) {
-      throw new Error(`Invalid EIN format: expected 9 digits, got "${ein}"`);
+      throw new Error('Invalid EIN format: expected 9 digits');
     }
 
     try {

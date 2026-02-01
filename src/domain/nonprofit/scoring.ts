@@ -5,24 +5,10 @@ import {
   CheckResult,
   RedFlag,
   RedFlagResult,
-  RedFlagType,
-  RedFlagSeverity,
   ProPublica990Filing,
+  VettingThresholds,
 } from './types.js';
-import { ProPublicaClient } from './propublica-client.js';
 import { generateSummary } from './messages.js';
-
-// ============================================================================
-// Weight Configuration for Tier 1 Checks
-// ============================================================================
-
-const CHECK_WEIGHTS: Record<string, number> = {
-  '501c3_status': 30, // Critical - must be tax-exempt
-  years_operating: 15, // Stability indicator
-  revenue_range: 20, // Size appropriateness
-  overhead_ratio: 20, // Efficiency
-  recent_990: 15, // Data freshness
-};
 
 // ============================================================================
 // Tier 1 Individual Check Functions
@@ -33,7 +19,7 @@ const CHECK_WEIGHTS: Record<string, number> = {
  * PASS: subsection === "03"
  * FAIL: anything else
  */
-export function check501c3Status(profile: NonprofitProfile): Tier1Check {
+export function check501c3Status(profile: NonprofitProfile, t: VettingThresholds): Tier1Check {
   const passed = profile.subsection === '03';
 
   return {
@@ -43,17 +29,17 @@ export function check501c3Status(profile: NonprofitProfile): Tier1Check {
     detail: passed
       ? `501(c)(3) public charity (subsection ${profile.subsection})`
       : `Not a 501(c)(3) - subsection ${profile.subsection || 'unknown'}`,
-    weight: CHECK_WEIGHTS['501c3_status'],
+    weight: t.weight501c3Status,
   };
 }
 
 /**
  * Check 2: Years Operating
- * PASS: >= 3 years
- * REVIEW: 1-3 years
- * FAIL: < 1 year or no ruling date
+ * PASS: >= yearsPassMin
+ * REVIEW: >= yearsReviewMin
+ * FAIL: < yearsReviewMin or no ruling date
  */
-export function checkYearsOperating(profile: NonprofitProfile): Tier1Check {
+export function checkYearsOperating(profile: NonprofitProfile, t: VettingThresholds): Tier1Check {
   const years = profile.years_operating;
 
   let result: CheckResult;
@@ -62,10 +48,10 @@ export function checkYearsOperating(profile: NonprofitProfile): Tier1Check {
   if (years === null || years < 0) {
     result = 'FAIL';
     detail = 'No ruling date available';
-  } else if (years < 1) {
+  } else if (years < t.yearsReviewMin) {
     result = 'FAIL';
-    detail = `Less than 1 year operating (${years} years since ${profile.ruling_date})`;
-  } else if (years < 3) {
+    detail = `Less than ${t.yearsReviewMin} year${t.yearsReviewMin === 1 ? '' : 's'} operating (${years} year${years === 1 ? '' : 's'} since ${profile.ruling_date})`;
+  } else if (years < t.yearsPassMin) {
     result = 'REVIEW';
     detail = `${years} years operating (since ${profile.ruling_date}) - newer organization`;
   } else {
@@ -78,17 +64,17 @@ export function checkYearsOperating(profile: NonprofitProfile): Tier1Check {
     passed: result === 'PASS',
     result,
     detail,
-    weight: CHECK_WEIGHTS['years_operating'],
+    weight: t.weightYearsOperating,
   };
 }
 
 /**
  * Check 3: Revenue Range
- * PASS: $100K - $10M
- * REVIEW: $50K - $100K or $10M - $50M
- * FAIL: < $50K or > $50M or $0/missing
+ * PASS: revenuePassMin - revenuePassMax
+ * REVIEW: revenueFailMin - revenuePassMin or revenuePassMax - revenueReviewMax
+ * FAIL: < revenueFailMin or > revenueReviewMax or $0/missing
  */
-export function checkRevenueRange(profile: NonprofitProfile): Tier1Check {
+export function checkRevenueRange(profile: NonprofitProfile, t: VettingThresholds): Tier1Check {
   const revenue = profile.latest_990?.total_revenue;
 
   let result: CheckResult;
@@ -103,21 +89,21 @@ export function checkRevenueRange(profile: NonprofitProfile): Tier1Check {
   } else if (revenue === 0) {
     result = 'FAIL';
     detail = 'Zero revenue reported';
-  } else if (revenue < 50000) {
+  } else if (revenue < t.revenueFailMin) {
     result = 'FAIL';
     detail = `$${formatNumber(revenue)} revenue - too small to assess reliably`;
-  } else if (revenue < 100000) {
+  } else if (revenue < t.revenuePassMin) {
     result = 'REVIEW';
     detail = `$${formatNumber(revenue)} revenue - small but viable`;
-  } else if (revenue <= 10000000) {
+  } else if (revenue <= t.revenuePassMax) {
     result = 'PASS';
     detail = `$${formatNumber(revenue)} revenue - appropriate size for impact`;
-  } else if (revenue <= 50000000) {
+  } else if (revenue <= t.revenueReviewMax) {
     result = 'REVIEW';
     detail = `$${formatNumber(revenue)} revenue - larger organization, may have different needs`;
   } else {
     result = 'FAIL';
-    detail = `$${formatNumber(revenue)} revenue - outside target scope (>$50M)`;
+    detail = `$${formatNumber(revenue)} revenue - outside target scope (>$${formatNumber(t.revenueReviewMax)})`;
   }
 
   return {
@@ -125,7 +111,7 @@ export function checkRevenueRange(profile: NonprofitProfile): Tier1Check {
     passed: result === 'PASS',
     result,
     detail,
-    weight: CHECK_WEIGHTS['revenue_range'],
+    weight: t.weightRevenueRange,
   };
 }
 
@@ -135,32 +121,27 @@ export function checkRevenueRange(profile: NonprofitProfile): Tier1Check {
  * NOTE: ProPublica data doesn't separate program vs admin expenses,
  * so we cannot calculate true overhead (admin/fundraising %).
  *
- * Instead, we check Expense-to-Revenue ratio:
- * - 70-100%: Healthy - org is deploying funds toward mission
- * - 50-70%: Review - may be accumulating reserves or underspending
- * - <50%: Concerning - significant funds not being deployed
- * - >100%: Review - spending more than revenue (may be sustainable via reserves)
- * - >120%: Concerning - potentially unsustainable burn rate
+ * Instead, we check Expense-to-Revenue ratio using configurable bands.
  */
-export function checkOverheadRatio(profile: NonprofitProfile): Tier1Check {
+export function checkOverheadRatio(profile: NonprofitProfile, t: VettingThresholds): Tier1Check {
   const ratio = profile.latest_990?.overhead_ratio;
 
   let result: CheckResult;
   let detail: string;
 
-  if (ratio === undefined || ratio === null) {
+  if (ratio === undefined || ratio === null || Number.isNaN(ratio)) {
     result = 'REVIEW';
     detail = 'Cannot calculate expense efficiency - missing data';
-  } else if (ratio >= 0.70 && ratio <= 1.0) {
+  } else if (ratio >= t.expenseRatioPassMin && ratio <= t.expenseRatioPassMax) {
     result = 'PASS';
     detail = `${formatPercent(ratio)} expense-to-revenue ratio - healthy fund deployment`;
-  } else if (ratio > 1.0 && ratio <= 1.2) {
+  } else if (ratio > t.expenseRatioPassMax && ratio <= t.expenseRatioHighReview) {
     result = 'REVIEW';
     detail = `${formatPercent(ratio)} expense-to-revenue ratio - spending exceeds revenue (check reserves)`;
-  } else if (ratio > 1.2) {
+  } else if (ratio > t.expenseRatioHighReview) {
     result = 'FAIL';
     detail = `${formatPercent(ratio)} expense-to-revenue ratio - potentially unsustainable`;
-  } else if (ratio >= 0.5) {
+  } else if (ratio >= t.expenseRatioLowReview) {
     result = 'REVIEW';
     detail = `${formatPercent(ratio)} expense-to-revenue ratio - lower than typical (accumulating reserves?)`;
   } else {
@@ -173,17 +154,17 @@ export function checkOverheadRatio(profile: NonprofitProfile): Tier1Check {
     passed: result === 'PASS',
     result,
     detail,
-    weight: CHECK_WEIGHTS['overhead_ratio'],
+    weight: t.weightOverheadRatio,
   };
 }
 
 /**
  * Check 5: Recent 990 Filed
- * PASS: Filed within 2 years
- * REVIEW: Filed 2-3 years ago
- * FAIL: > 3 years since last filing or no filings
+ * PASS: Filed within filing990PassMax years
+ * REVIEW: Filed within filing990ReviewMax years
+ * FAIL: Older or no filings
  */
-export function checkRecent990(profile: NonprofitProfile): Tier1Check {
+export function checkRecent990(profile: NonprofitProfile, t: VettingThresholds): Tier1Check {
   const taxPeriod = profile.latest_990?.tax_period;
 
   let result: CheckResult;
@@ -193,17 +174,12 @@ export function checkRecent990(profile: NonprofitProfile): Tier1Check {
     result = 'FAIL';
     detail = 'No 990 filings on record';
   } else {
-    // Parse tax period (YYYY-MM format)
-    const [year, month] = taxPeriod.split('-').map(Number);
-    const filingDate = new Date(year, month - 1, 1);
-    const now = new Date();
-    const yearsAgo =
-      (now.getTime() - filingDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+    const yearsAgo = yearsFromTaxPeriod(taxPeriod);
 
-    if (yearsAgo <= 2) {
+    if (yearsAgo <= t.filing990PassMax) {
       result = 'PASS';
       detail = `Most recent 990 from ${taxPeriod} (${profile.latest_990?.form_type})`;
-    } else if (yearsAgo <= 3) {
+    } else if (yearsAgo <= t.filing990ReviewMax) {
       result = 'REVIEW';
       detail = `Most recent 990 from ${taxPeriod} - data is ${yearsAgo.toFixed(1)} years old`;
     } else {
@@ -217,7 +193,7 @@ export function checkRecent990(profile: NonprofitProfile): Tier1Check {
     passed: result === 'PASS',
     result,
     detail,
-    weight: CHECK_WEIGHTS['recent_990'],
+    weight: t.weightRecent990,
   };
 }
 
@@ -249,16 +225,17 @@ export function calculateScore(checks: Tier1Check[]): number {
  */
 export function getRecommendation(
   score: number,
-  redFlags: RedFlag[]
+  redFlags: RedFlag[],
+  t: VettingThresholds
 ): 'PASS' | 'REVIEW' | 'REJECT' {
   // Any HIGH severity red flag = auto-reject
   if (redFlags.some((flag) => flag.severity === 'HIGH')) {
     return 'REJECT';
   }
 
-  if (score >= 80) {
+  if (score >= t.scorePassMin) {
     return 'PASS';
-  } else if (score >= 50) {
+  } else if (score >= t.scoreReviewMin) {
     return 'REVIEW';
   } else {
     return 'REJECT';
@@ -274,7 +251,8 @@ export function getRecommendation(
  */
 export function detectRedFlags(
   profile: NonprofitProfile,
-  filings?: ProPublica990Filing[]
+  filings: ProPublica990Filing[] | undefined,
+  t: VettingThresholds
 ): RedFlag[] {
   const flags: RedFlag[] = [];
 
@@ -305,27 +283,25 @@ export function detectRedFlags(
     });
   }
 
-  // Too new (< 1 year)
-  if (profile.years_operating !== null && profile.years_operating < 1) {
+  // Too new
+  if (profile.years_operating !== null && profile.years_operating < t.redFlagTooNewYears) {
     flags.push({
       severity: 'MEDIUM',
       type: 'too_new',
-      detail: `Organization is less than 1 year old`,
+      detail: `Organization is less than ${t.redFlagTooNewYears} year${t.redFlagTooNewYears === 1 ? '' : 's'} old`,
     });
   }
 
   // Check 990-related flags
   if (profile.latest_990) {
-    // Stale 990 (> 4 years)
     const taxPeriod = profile.latest_990.tax_period;
     if (taxPeriod) {
-      const [year] = taxPeriod.split('-').map(Number);
-      const currentYear = new Date().getFullYear();
-      if (currentYear - year > 4) {
+      const yearsAgo = yearsFromTaxPeriod(taxPeriod);
+      if (yearsAgo > t.redFlagStale990Years) {
         flags.push({
           severity: 'HIGH',
           type: 'stale_990',
-          detail: `Most recent 990 is from ${taxPeriod} (>${currentYear - year} years old)`,
+          detail: `Most recent 990 is from ${taxPeriod} (${yearsAgo.toFixed(1)} years old)`,
         });
       }
     }
@@ -333,27 +309,24 @@ export function detectRedFlags(
     // Expense efficiency flags (NOTE: this is expense/revenue, NOT true overhead)
     const ratio = profile.latest_990.overhead_ratio;
     if (ratio !== undefined && ratio !== null) {
-      // Very high burn rate (spending significantly more than revenue)
-      if (ratio > 1.2) {
+      if (ratio > t.redFlagHighExpenseRatio) {
         flags.push({
           severity: 'HIGH',
           type: 'very_high_overhead',
           detail: `Expense-to-revenue ratio is ${formatPercent(ratio)} - spending far exceeds income`,
         });
-      }
-      // Very low fund deployment (potential hoarding)
-      else if (ratio < 0.5) {
+      } else if (ratio < t.redFlagLowExpenseRatio) {
         flags.push({
           severity: 'MEDIUM',
-          type: 'high_overhead',
+          type: 'low_fund_deployment',
           detail: `Expense-to-revenue ratio is only ${formatPercent(ratio)} - low fund deployment`,
         });
       }
     }
 
-    // Very low revenue (< $25K)
+    // Very low revenue
     const revenue = profile.latest_990.total_revenue;
-    if (revenue !== undefined && revenue < 25000) {
+    if (revenue != null && revenue < t.redFlagVeryLowRevenue) {
       flags.push({
         severity: 'MEDIUM',
         type: 'very_low_revenue',
@@ -368,10 +341,10 @@ export function detectRedFlags(
     const latest = sortedFilings[0];
     const previous = sortedFilings[1];
 
-    if (latest.totrevenue && previous.totrevenue && previous.totrevenue > 0) {
+    if (latest.totrevenue != null && previous.totrevenue != null && previous.totrevenue > 0) {
       const decline =
         (previous.totrevenue - latest.totrevenue) / previous.totrevenue;
-      if (decline > 0.5) {
+      if (decline > t.redFlagRevenueDeclinePercent) {
         flags.push({
           severity: 'MEDIUM',
           type: 'revenue_decline',
@@ -393,28 +366,32 @@ export function detectRedFlags(
  */
 export function runTier1Checks(
   profile: NonprofitProfile,
-  filings?: ProPublica990Filing[]
+  filings: ProPublica990Filing[] | undefined,
+  t: VettingThresholds
 ): Tier1Result {
   // Run all individual checks
   const checks: Tier1Check[] = [
-    check501c3Status(profile),
-    checkYearsOperating(profile),
-    checkRevenueRange(profile),
-    checkOverheadRatio(profile),
-    checkRecent990(profile),
+    check501c3Status(profile, t),
+    checkYearsOperating(profile, t),
+    checkRevenueRange(profile, t),
+    checkOverheadRatio(profile, t),
+    checkRecent990(profile, t),
   ];
 
   // Calculate score
   const score = calculateScore(checks);
 
   // Detect red flags
-  const redFlags = detectRedFlags(profile, filings);
+  const redFlags = detectRedFlags(profile, filings, t);
 
   // Determine recommendation
-  const recommendation = getRecommendation(score, redFlags);
+  const recommendation = getRecommendation(score, redFlags, t);
 
   // Overall passed = recommendation is PASS
   const passed = recommendation === 'PASS';
+
+  // Collect review reasons: details from non-PASS checks + HIGH red flags
+  const review_reasons = buildReviewReasons(checks, redFlags);
 
   // Generate standardized summary
   const summary = generateSummary(
@@ -434,6 +411,7 @@ export function runTier1Checks(
     summary,
     checks,
     recommendation,
+    review_reasons,
     red_flags: redFlags,
   };
 }
@@ -443,9 +421,10 @@ export function runTier1Checks(
  */
 export function runRedFlagCheck(
   profile: NonprofitProfile,
-  filings?: ProPublica990Filing[]
+  filings: ProPublica990Filing[] | undefined,
+  t: VettingThresholds
 ): RedFlagResult {
-  const flags = detectRedFlags(profile, filings);
+  const flags = detectRedFlags(profile, filings, t);
 
   return {
     ein: profile.ein,
@@ -459,12 +438,43 @@ export function runRedFlagCheck(
 // Utility Functions
 // ============================================================================
 
-function formatNumber(num: number): string {
-  if (num >= 1000000) {
-    return `${(num / 1000000).toFixed(1)}M`;
+/**
+ * Collect human-readable reasons for non-PASS checks and HIGH red flags.
+ * Used by the Bonsaei dashboard to show "why this recommendation?" context.
+ */
+function buildReviewReasons(checks: Tier1Check[], redFlags: RedFlag[]): string[] {
+  const reasons: string[] = [];
+
+  for (const check of checks) {
+    if (check.result !== 'PASS') {
+      reasons.push(check.detail);
+    }
   }
-  if (num >= 1000) {
-    return `${(num / 1000).toFixed(0)}K`;
+
+  for (const flag of redFlags) {
+    if (flag.severity === 'HIGH') {
+      reasons.push(`RED FLAG: ${flag.detail}`);
+    }
+  }
+
+  return reasons;
+}
+
+function yearsFromTaxPeriod(taxPeriod: string): number {
+  const [year, month] = taxPeriod.split('-').map(Number);
+  if (!Number.isFinite(year) || !Number.isFinite(month)) return Infinity;
+  const filingDate = new Date(year, month - 1, 1);
+  return (Date.now() - filingDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+}
+
+function formatNumber(num: number): string {
+  const abs = Math.abs(num);
+  const sign = num < 0 ? '-' : '';
+  if (abs >= 1000000) {
+    return `${sign}${(abs / 1000000).toFixed(1)}M`;
+  }
+  if (abs >= 1000) {
+    return `${sign}${(abs / 1000).toFixed(0)}K`;
   }
   return num.toFixed(0);
 }

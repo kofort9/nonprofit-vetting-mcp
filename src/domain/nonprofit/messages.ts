@@ -79,8 +79,8 @@ export const CHECK_MESSAGES: Record<
 export const RED_FLAG_FACTORS: Record<string, string> = {
   no_990_on_file: 'No 990 filings on record',
   stale_990: 'Financial data is severely outdated',
-  high_overhead: 'Low fund deployment ratio',
-  very_high_overhead: 'Unsustainable spending pattern',
+  low_fund_deployment: 'Low fund deployment ratio',
+  very_low_fund_deployment: 'Unsustainable spending pattern',
   no_ruling_date: 'No IRS determination date',
   very_low_revenue: 'Very small operation',
   revenue_decline: 'Significant revenue decline',
