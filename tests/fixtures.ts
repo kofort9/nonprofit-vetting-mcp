@@ -55,6 +55,7 @@ export function make990(overrides?: Partial<Latest990Summary>): Latest990Summary
     total_assets: 1_000_000,
     total_liabilities: 200_000,
     overhead_ratio: 0.8,
+    officer_compensation_ratio: null,
     ...overrides,
   };
 }

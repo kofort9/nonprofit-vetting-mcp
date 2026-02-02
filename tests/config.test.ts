@@ -88,6 +88,23 @@ describe('validateThresholds', () => {
     expect(() => validateThresholds(t)).toThrow(/scorePassMin must be between/);
   });
 
+  // --- Officer compensation thresholds ---
+
+  it('rejects redFlagModerateCompensation > redFlagHighCompensation', () => {
+    const t = makeThresholds({ redFlagModerateCompensation: 0.5, redFlagHighCompensation: 0.3 });
+    expect(() => validateThresholds(t)).toThrow(/redFlagModerateCompensation/);
+  });
+
+  it('rejects redFlagHighCompensation > 1', () => {
+    const t = makeThresholds({ redFlagHighCompensation: 1.5 });
+    expect(() => validateThresholds(t)).toThrow(/redFlagHighCompensation/);
+  });
+
+  it('rejects redFlagModerateCompensation < 0', () => {
+    const t = makeThresholds({ redFlagModerateCompensation: -0.1 });
+    expect(() => validateThresholds(t)).toThrow(/redFlagModerateCompensation/);
+  });
+
   // --- Multiple errors ---
 
   it('reports multiple errors at once', () => {

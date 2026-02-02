@@ -1,4 +1,4 @@
-import { ProPublicaClient } from './propublica-client.js';
+import { ProPublicaClient } from "./propublica-client.js";
 import {
   NonprofitProfile,
   NonprofitSearchResult,
@@ -10,11 +10,13 @@ import {
   VettingThresholds,
   ProPublicaOrgDetailResponse,
   ProPublica990Filing,
-} from './types.js';
-import { runTier1Checks, runRedFlagCheck } from './scoring.js';
-import { logDebug, logError } from '../../core/logging.js';
+} from "./types.js";
+import { runTier1Checks, runRedFlagCheck } from "./scoring.js";
+import { resolveThresholds } from "./sector-thresholds.js";
+import { logDebug, logError } from "../../core/logging.js";
 
-const ATTRIBUTION = 'Data provided by ProPublica Nonprofit Explorer (https://projects.propublica.org/nonprofits/)';
+const ATTRIBUTION =
+  "Data provided by ProPublica Nonprofit Explorer (https://projects.propublica.org/nonprofits/)";
 
 // Security: Input length limits to prevent DoS
 const MAX_QUERY_LENGTH = 500;
@@ -67,6 +69,7 @@ function buildProfile(response: ProPublicaOrgDetailResponse): {
       total_assets: latestFiling.totassetsend,
       total_liabilities: latestFiling.totliabend,
       overhead_ratio: overheadRatio,
+      officer_compensation_ratio: latestFiling.pct_compnsatncurrofcr ?? null,
       program_revenue: latestFiling.totprgmrevnue,
       contributions: latestFiling.totcntrbgfts,
     };
@@ -81,13 +84,13 @@ function buildProfile(response: ProPublicaOrgDetailResponse): {
     ein: ProPublicaClient.formatEin(org.ein),
     name: org.name,
     address: {
-      city: org.city || '',
-      state: org.state || '',
+      city: org.city || "",
+      state: org.state || "",
     },
-    ruling_date: org.ruling_date || '',
+    ruling_date: org.ruling_date || "",
     years_operating: yearsOperating,
     subsection: subsection,
-    ntee_code: org.ntee_code || '',
+    ntee_code: org.ntee_code || "",
     latest_990: latest990,
     filing_count: filings.length,
   };
@@ -107,26 +110,42 @@ async function withEinLookup<T>(
   client: ProPublicaClient,
   ein: string,
   toolName: string,
-  fn: (profile: NonprofitProfile, filings: ProPublica990Filing[]) => T
+  fn: (profile: NonprofitProfile, filings: ProPublica990Filing[]) => T,
 ): Promise<ToolResponse<T>> {
   try {
     if (!ein) {
-      return { success: false, error: 'EIN parameter is required', attribution: ATTRIBUTION };
+      return {
+        success: false,
+        error: "EIN parameter is required",
+        attribution: ATTRIBUTION,
+      };
     }
 
     logDebug(`${toolName} for EIN: ${ein}`);
     const response = await client.getOrganization(ein);
 
     if (!response) {
-      return { success: false, error: `Organization not found with EIN: ${ein}`, attribution: ATTRIBUTION };
+      return {
+        success: false,
+        error: `Organization not found with EIN: ${ein}`,
+        attribution: ATTRIBUTION,
+      };
     }
 
     const { profile, filings } = buildProfile(response);
-    return { success: true, data: fn(profile, filings), attribution: ATTRIBUTION };
+    return {
+      success: true,
+      data: fn(profile, filings),
+      attribution: ATTRIBUTION,
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logError(`${toolName} failed:`, message);
-    return { success: false, error: `${toolName} failed: ${message}`, attribution: ATTRIBUTION };
+    return {
+      success: false,
+      error: `${toolName} failed: ${message}`,
+      attribution: ATTRIBUTION,
+    };
   }
 }
 
@@ -139,13 +158,13 @@ async function withEinLookup<T>(
  */
 export async function searchNonprofit(
   client: ProPublicaClient,
-  input: SearchNonprofitInput
+  input: SearchNonprofitInput,
 ): Promise<ToolResponse<SearchNonprofitResponse>> {
   try {
     if (!input.query || input.query.trim().length === 0) {
       return {
         success: false,
-        error: 'Query parameter is required',
+        error: "Query parameter is required",
         attribution: ATTRIBUTION,
       };
     }
@@ -177,13 +196,15 @@ export async function searchNonprofit(
 
     const response = await client.search(input.query, input.state, input.city);
 
-    const results: NonprofitSearchResult[] = response.organizations.map((org) => ({
-      ein: ProPublicaClient.formatEin(org.ein),
-      name: org.name,
-      city: org.city || '',
-      state: org.state || '',
-      ntee_code: org.ntee_code || '',
-    }));
+    const results: NonprofitSearchResult[] = response.organizations.map(
+      (org) => ({
+        ein: ProPublicaClient.formatEin(org.ein),
+        name: org.name,
+        city: org.city || "",
+        state: org.state || "",
+        ntee_code: org.ntee_code || "",
+      }),
+    );
 
     return {
       success: true,
@@ -196,7 +217,7 @@ export async function searchNonprofit(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    logError('searchNonprofit failed:', message);
+    logError("searchNonprofit failed:", message);
     return {
       success: false,
       error: `Search failed: ${message}`,
@@ -210,9 +231,14 @@ export async function searchNonprofit(
  */
 export async function getNonprofitProfile(
   client: ProPublicaClient,
-  input: GetNonprofitProfileInput
+  input: GetNonprofitProfileInput,
 ): Promise<ToolResponse<NonprofitProfile>> {
-  return withEinLookup(client, input.ein, 'getNonprofitProfile', (profile) => profile);
+  return withEinLookup(
+    client,
+    input.ein,
+    "getNonprofitProfile",
+    (profile) => profile,
+  );
 }
 
 /**
@@ -221,10 +247,14 @@ export async function getNonprofitProfile(
 export async function checkTier1(
   client: ProPublicaClient,
   input: CheckTier1Input,
-  thresholds: VettingThresholds
+  thresholds: VettingThresholds,
 ): Promise<ToolResponse<Tier1Result>> {
-  return withEinLookup(client, input.ein, 'checkTier1', (profile, filings) =>
-    runTier1Checks(profile, filings, thresholds)
+  return withEinLookup(client, input.ein, "checkTier1", (profile, filings) =>
+    runTier1Checks(
+      profile,
+      filings,
+      resolveThresholds(thresholds, profile.ntee_code),
+    ),
   );
 }
 
@@ -234,9 +264,13 @@ export async function checkTier1(
 export async function getRedFlags(
   client: ProPublicaClient,
   input: GetRedFlagsInput,
-  thresholds: VettingThresholds
+  thresholds: VettingThresholds,
 ): Promise<ToolResponse<RedFlagResult>> {
-  return withEinLookup(client, input.ein, 'getRedFlags', (profile, filings) =>
-    runRedFlagCheck(profile, filings, thresholds)
+  return withEinLookup(client, input.ein, "getRedFlags", (profile, filings) =>
+    runRedFlagCheck(
+      profile,
+      filings,
+      resolveThresholds(thresholds, profile.ntee_code),
+    ),
   );
 }

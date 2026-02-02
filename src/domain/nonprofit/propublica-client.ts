@@ -1,12 +1,12 @@
-import axios, { AxiosInstance, AxiosError } from 'axios';
-import { ProPublicaConfig } from '../../core/config.js';
-import { logDebug, logError, logWarn } from '../../core/logging.js';
+import axios, { AxiosInstance, AxiosError } from "axios";
+import { ProPublicaConfig } from "../../core/config.js";
+import { logDebug, logError, logWarn } from "../../core/logging.js";
 import {
   ProPublicaSearchResponse,
   ProPublicaOrgDetailResponse,
   ProPublicaOrganization,
   ProPublica990Filing,
-} from './types.js';
+} from "./types.js";
 
 /**
  * Rate limiter that serializes requests via a promise chain.
@@ -53,8 +53,8 @@ export class ProPublicaClient {
     this.client = axios.create({
       baseURL: config.apiBaseUrl,
       headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'nonprofit-vetting-mcp/1.0',
+        "Content-Type": "application/json",
+        "User-Agent": "nonprofit-vetting-mcp/1.0",
       },
       timeout: 30000, // 30 second timeout
     });
@@ -65,7 +65,7 @@ export class ProPublicaClient {
         logDebug(`API Request: ${config.method?.toUpperCase()} ${config.url}`);
         return config;
       },
-      (error) => Promise.reject(error)
+      (error) => Promise.reject(error),
     );
 
     // Response interceptor for error handling
@@ -78,15 +78,15 @@ export class ProPublicaClient {
         if (error.response) {
           logError(
             `API Error: ${error.response.status} ${error.config?.url}`,
-            error.response.data
+            error.response.data,
           );
         } else if (error.request) {
-          logError('API Error: No response received', error.message);
+          logError("API Error: No response received", error.message);
         } else {
-          logError('API Error:', error.message);
+          logError("API Error:", error.message);
         }
         return Promise.reject(error);
-      }
+      },
     );
   }
 
@@ -101,7 +101,7 @@ export class ProPublicaClient {
   async search(
     query: string,
     state?: string,
-    city?: string
+    city?: string,
   ): Promise<ProPublicaSearchResponse> {
     await this.rateLimiter.waitIfNeeded();
 
@@ -113,8 +113,8 @@ export class ProPublicaClient {
 
     try {
       const response = await this.client.get<ProPublicaSearchResponse>(
-        '/search.json',
-        { params }
+        "/search.json",
+        { params },
       );
 
       let results = response.data.organizations || [];
@@ -123,7 +123,7 @@ export class ProPublicaClient {
       if (city && results.length > 0) {
         const cityLower = city.toLowerCase();
         results = results.filter(
-          (org) => org.city && org.city.toLowerCase().includes(cityLower)
+          (org) => org.city && org.city.toLowerCase().includes(cityLower),
         );
       }
 
@@ -147,20 +147,22 @@ export class ProPublicaClient {
    * @returns Organization details with filings
    * @throws Error if EIN format is invalid
    */
-  async getOrganization(ein: string): Promise<ProPublicaOrgDetailResponse | null> {
+  async getOrganization(
+    ein: string,
+  ): Promise<ProPublicaOrgDetailResponse | null> {
     await this.rateLimiter.waitIfNeeded();
 
     // Normalize EIN - remove dashes and whitespace
-    const normalizedEin = ein.replace(/[-\s]/g, '');
+    const normalizedEin = ein.replace(/[-\s]/g, "");
 
     // Validate EIN is exactly 9 digits (security: prevent path injection)
     if (!/^\d{9}$/.test(normalizedEin)) {
-      throw new Error('Invalid EIN format: expected 9 digits');
+      throw new Error("Invalid EIN format: expected 9 digits");
     }
 
     try {
       const response = await this.client.get<ProPublicaOrgDetailResponse>(
-        `/organizations/${normalizedEin}.json`
+        `/organizations/${normalizedEin}.json`,
       );
       return response.data;
     } catch (error) {
@@ -176,7 +178,7 @@ export class ProPublicaClient {
    * Format EIN with standard dash (XX-XXXXXXX format)
    */
   static formatEin(ein: string | number): string {
-    const einStr = String(ein).replace(/[-\s]/g, '').padStart(9, '0');
+    const einStr = String(ein).replace(/[-\s]/g, "").padStart(9, "0");
     return `${einStr.slice(0, 2)}-${einStr.slice(2)}`;
   }
 
@@ -184,7 +186,7 @@ export class ProPublicaClient {
    * Get the most recent 990 filing from a list
    */
   static getMostRecentFiling(
-    filings: ProPublica990Filing[]
+    filings: ProPublica990Filing[],
   ): ProPublica990Filing | null {
     if (!filings || filings.length === 0) return null;
 
@@ -210,11 +212,15 @@ export class ProPublicaClient {
     const expenses = filing.totfuncexpns;
 
     // Guard against missing, zero, or negative revenue
-    if (typeof revenue !== 'number' || !Number.isFinite(revenue) || revenue <= 0) {
+    if (
+      typeof revenue !== "number" ||
+      !Number.isFinite(revenue) ||
+      revenue <= 0
+    ) {
       return null;
     }
     // Guard against missing or non-finite expenses
-    if (typeof expenses !== 'number' || !Number.isFinite(expenses)) {
+    if (typeof expenses !== "number" || !Number.isFinite(expenses)) {
       return null;
     }
 
@@ -233,7 +239,11 @@ export class ProPublicaClient {
     const matchFull = rulingDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (matchFull) {
       const [, year, month, day] = matchFull;
-      return new Date(parseInt(year, 10), parseInt(month, 10) - 1, parseInt(day, 10));
+      return new Date(
+        parseInt(year, 10),
+        parseInt(month, 10) - 1,
+        parseInt(day, 10),
+      );
     }
 
     // Handle YYYY-MM format
@@ -260,8 +270,8 @@ export class ProPublicaClient {
   static getSubsection(org: ProPublicaOrganization): string {
     // Org detail uses subsection_code, search uses subseccd
     const code = org.subsection_code ?? org.subseccd;
-    if (code === undefined || code === null) return '';
-    return String(code).padStart(2, '0');
+    if (code === undefined || code === null) return "";
+    return String(code).padStart(2, "0");
   }
 
   /**
@@ -272,7 +282,8 @@ export class ProPublicaClient {
     if (!date || isNaN(date.getTime())) return null;
 
     const now = new Date();
-    const years = (now.getTime() - date.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+    const years =
+      (now.getTime() - date.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
     return Number.isFinite(years) ? Math.floor(years) : null;
   }
 
@@ -291,9 +302,9 @@ export class ProPublicaClient {
    * ProPublica uses: 0/1 = 990, 2 = 990EZ, 3 = 990PF
    */
   static getFormTypeName(formtype: number): string {
-    if (formtype === 0 || formtype === 1 || formtype === 990) return '990';
-    if (formtype === 2) return '990EZ';
-    if (formtype === 3) return '990PF';
+    if (formtype === 0 || formtype === 1 || formtype === 990) return "990";
+    if (formtype === 2) return "990EZ";
+    if (formtype === 3) return "990PF";
     return `Form ${formtype}`;
   }
 }

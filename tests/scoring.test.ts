@@ -11,6 +11,8 @@ import {
   runTier1Checks,
   runRedFlagCheck,
 } from '../src/domain/nonprofit/scoring.js';
+import { resolveThresholds, getSupportedSectors } from '../src/domain/nonprofit/sector-thresholds.js';
+import { validateThresholds } from '../src/core/config.js';
 import { DEFAULT_THRESHOLDS, makeProfile, make990, makeFiling, taxPrdOffset } from './fixtures.js';
 
 const t = DEFAULT_THRESHOLDS;
@@ -458,6 +460,85 @@ describe('detectRedFlags', () => {
       expect.objectContaining({ type: 'revenue_decline' })
     );
   });
+
+  // --- Officer compensation ratio (now reads from profile.latest_990) ---
+
+  it('flags high officer compensation > 40% as HIGH', () => {
+    const profile = makeProfile({ latest_990: make990({ officer_compensation_ratio: 0.50 }) });
+    const flags = detectRedFlags(profile, [makeFiling()], t);
+    expect(flags).toContainEqual(
+      expect.objectContaining({ type: 'high_officer_compensation', severity: 'HIGH' })
+    );
+  });
+
+  it('flags moderate officer compensation > 25% as MEDIUM', () => {
+    const profile = makeProfile({ latest_990: make990({ officer_compensation_ratio: 0.30 }) });
+    const flags = detectRedFlags(profile, [makeFiling()], t);
+    expect(flags).toContainEqual(
+      expect.objectContaining({ type: 'high_officer_compensation', severity: 'MEDIUM' })
+    );
+  });
+
+  it('does NOT flag compensation at exactly 40% (boundary uses >)', () => {
+    const profile = makeProfile({ latest_990: make990({ officer_compensation_ratio: 0.40 }) });
+    const flags = detectRedFlags(profile, [makeFiling()], t);
+    expect(flags).not.toContainEqual(
+      expect.objectContaining({ type: 'high_officer_compensation', severity: 'HIGH' })
+    );
+  });
+
+  it('does NOT flag compensation at exactly 25% (boundary uses >)', () => {
+    const profile = makeProfile({ latest_990: make990({ officer_compensation_ratio: 0.25 }) });
+    const flags = detectRedFlags(profile, [makeFiling()], t);
+    expect(flags).not.toContainEqual(
+      expect.objectContaining({ type: 'high_officer_compensation' })
+    );
+  });
+
+  it('does NOT flag compensation at 20% (below moderate threshold)', () => {
+    const profile = makeProfile({ latest_990: make990({ officer_compensation_ratio: 0.20 }) });
+    const flags = detectRedFlags(profile, [makeFiling()], t);
+    expect(flags).not.toContainEqual(
+      expect.objectContaining({ type: 'high_officer_compensation' })
+    );
+  });
+
+  it('does NOT flag when officer_compensation_ratio is null', () => {
+    const profile = makeProfile({ latest_990: make990({ officer_compensation_ratio: null }) });
+    const flags = detectRedFlags(profile, [makeFiling()], t);
+    expect(flags).not.toContainEqual(
+      expect.objectContaining({ type: 'high_officer_compensation' })
+    );
+  });
+
+  it('does NOT flag when officer_compensation_ratio is 0', () => {
+    const profile = makeProfile({ latest_990: make990({ officer_compensation_ratio: 0 }) });
+    const flags = detectRedFlags(profile, [makeFiling()], t);
+    expect(flags).not.toContainEqual(
+      expect.objectContaining({ type: 'high_officer_compensation' })
+    );
+  });
+
+  it('does NOT flag when officer_compensation_ratio is negative (data anomaly)', () => {
+    const profile = makeProfile({ latest_990: make990({ officer_compensation_ratio: -0.001 }) });
+    const flags = detectRedFlags(profile, [makeFiling()], t);
+    expect(flags).not.toContainEqual(
+      expect.objectContaining({ type: 'high_officer_compensation' })
+    );
+  });
+
+  // --- Revenue decline: negative revenue guard ---
+
+  it('does not flag decline when latest revenue is negative (data anomaly)', () => {
+    const filings = [
+      makeFiling({ tax_prd: taxPrdOffset(0), totrevenue: -50_000 }),
+      makeFiling({ tax_prd: taxPrdOffset(1), totrevenue: 500_000 }),
+    ];
+    const flags = detectRedFlags(makeProfile(), filings, t);
+    expect(flags).not.toContainEqual(
+      expect.objectContaining({ type: 'revenue_decline' })
+    );
+  });
 });
 
 // ============================================================================
@@ -571,5 +652,125 @@ describe('runRedFlagCheck', () => {
 
     expect(result.clean).toBe(false);
     expect(result.flags.length).toBeGreaterThan(0);
+  });
+});
+
+// ============================================================================
+// resolveThresholds (sector-specific)
+// ============================================================================
+
+describe('resolveThresholds', () => {
+  it('returns base thresholds unchanged for unknown NTEE code', () => {
+    const resolved = resolveThresholds(t, 'Z99');
+    expect(resolved).toEqual(t);
+  });
+
+  it('returns base thresholds for empty NTEE code', () => {
+    const resolved = resolveThresholds(t, '');
+    expect(resolved).toEqual(t);
+  });
+
+  it('overrides expense ratio thresholds for K (Food/Agriculture)', () => {
+    const resolved = resolveThresholds(t, 'K31');
+    expect(resolved.expenseRatioPassMin).toBe(0.6);
+    expect(resolved.expenseRatioPassMax).toBe(1.3);
+    expect(resolved.expenseRatioHighReview).toBe(1.5);
+    expect(resolved.redFlagHighExpenseRatio).toBe(1.5);
+    expect(resolved.redFlagLowExpenseRatio).toBe(0.4);
+    // Non-overridden fields stay at base
+    expect(resolved.weight501c3Status).toBe(t.weight501c3Status);
+    expect(resolved.revenuePassMin).toBe(t.revenuePassMin);
+  });
+
+  it('overrides revenue thresholds for A (Arts)', () => {
+    const resolved = resolveThresholds(t, 'A70');
+    expect(resolved.revenueFailMin).toBe(25_000);
+    expect(resolved.revenuePassMin).toBe(50_000);
+    expect(resolved.expenseRatioPassMin).toBe(0.6);
+    expect(resolved.redFlagVeryLowRevenue).toBe(15_000);
+    // Non-overridden fields stay at base
+    expect(resolved.expenseRatioPassMax).toBe(t.expenseRatioPassMax);
+  });
+
+  it('overrides revenue and compensation for E (Health)', () => {
+    const resolved = resolveThresholds(t, 'E32');
+    expect(resolved.revenuePassMax).toBe(50_000_000);
+    expect(resolved.revenueReviewMax).toBe(100_000_000);
+    expect(resolved.redFlagHighCompensation).toBe(0.5);
+    expect(resolved.redFlagModerateCompensation).toBe(0.35);
+    // Non-overridden fields stay at base
+    expect(resolved.weight501c3Status).toBe(t.weight501c3Status);
+  });
+
+  it('is case-insensitive on NTEE code', () => {
+    const resolved = resolveThresholds(t, 'k31');
+    expect(resolved.expenseRatioPassMax).toBe(1.3); // K override applied
+  });
+
+  it('all hardcoded sector overrides produce valid merged thresholds', () => {
+    for (const sector of getSupportedSectors()) {
+      const resolved = resolveThresholds(t, sector + '99');
+      expect(() => validateThresholds(resolved)).not.toThrow();
+    }
+  });
+
+  it('reports supported sectors', () => {
+    const sectors = getSupportedSectors();
+    expect(sectors).toContain('A');
+    expect(sectors).toContain('E');
+    expect(sectors).toContain('K');
+    expect(sectors.length).toBe(3);
+  });
+
+  // Integration: sector overrides affect scoring behavior
+
+  it('food bank with 1.3x expense ratio PASSES with K thresholds (would FAIL with base)', () => {
+    const profile = makeProfile({
+      ntee_code: 'K31',
+      latest_990: make990({ overhead_ratio: 1.25 }),
+    });
+    const resolved = resolveThresholds(t, profile.ntee_code);
+    // With base thresholds: 1.25 > 1.2 → FAIL (high review boundary)
+    const baseCheck = checkOverheadRatio(profile, t);
+    expect(baseCheck.result).toBe('FAIL');
+    // With K thresholds: 1.25 < 1.3 → PASS
+    const sectorCheck = checkOverheadRatio(profile, resolved);
+    expect(sectorCheck.result).toBe('PASS');
+  });
+
+  it('arts org with $60K revenue PASSES with A thresholds (would REVIEW with base)', () => {
+    const profile = makeProfile({
+      ntee_code: 'A70',
+      latest_990: make990({ total_revenue: 60_000 }),
+    });
+    const resolved = resolveThresholds(t, profile.ntee_code);
+    // With base thresholds: $60K is between failMin ($50K) and passMin ($100K) → REVIEW
+    const baseCheck = checkRevenueRange(profile, t);
+    expect(baseCheck.result).toBe('REVIEW');
+    // With A thresholds: $60K >= passMin ($50K) and <= passMax ($10M) → PASS
+    const sectorCheck = checkRevenueRange(profile, resolved);
+    expect(sectorCheck.result).toBe('PASS');
+  });
+
+  it('health org with 45% compensation does NOT flag HIGH (higher threshold)', () => {
+    const profile = makeProfile({
+      ntee_code: 'E32',
+      latest_990: make990({ officer_compensation_ratio: 0.45 }),
+    });
+    const resolved = resolveThresholds(t, profile.ntee_code);
+    const filings = [makeFiling()];
+    // With base thresholds: 0.45 > 0.40 → HIGH
+    const baseFlags = detectRedFlags(profile, filings, t);
+    expect(baseFlags).toContainEqual(
+      expect.objectContaining({ type: 'high_officer_compensation', severity: 'HIGH' })
+    );
+    // With E thresholds: 0.45 < 0.50 → MEDIUM (moderate threshold is 0.35)
+    const sectorFlags = detectRedFlags(profile, filings, resolved);
+    expect(sectorFlags).not.toContainEqual(
+      expect.objectContaining({ type: 'high_officer_compensation', severity: 'HIGH' })
+    );
+    expect(sectorFlags).toContainEqual(
+      expect.objectContaining({ type: 'high_officer_compensation', severity: 'MEDIUM' })
+    );
   });
 });
